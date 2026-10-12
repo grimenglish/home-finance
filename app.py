@@ -13,15 +13,18 @@ from finance import (KINDS, CATEGORIES, uid, empty, digest, item, due, active, t
                      signed, totals, card_total, paid, needed, source_name, validate,
                      operation, event, restore_event, replay, bill_payment, sample)
 from finance import bill_amount, bill_summary, monthly_amount_operation
+from finance import (expense_type, in_scope, scheduled, add_months, installment_amount,
+                     installment_details, installment_estimate)
 from sheets_store import SheetsStore, SetupRequired, UncertainWrite
 from auth_access import auth_ready, allowed_user, verify_login
 from google_signin import google_button
 
-st.set_page_config(page_title='우리집 금융관리', page_icon='🏠', layout='wide')
+st.set_page_config(page_title='내 출금 캘린더', page_icon='📅', layout='wide')
 st.markdown('''<style>
 .stApp{background:#f6f7f3} .block-container{padding-top:2rem;max-width:1400px}
 h1,h2,h3{color:#173f32} [data-testid="stMetric"]{background:white;border:1px solid #e3e8de;padding:22px;border-radius:15px}
 [data-testid="stMetricValue"]{font-size:1.8rem} [data-testid="stTabs"] [role="tablist"]{gap:8px;border-bottom:1px solid #dce5d7}
+[data-testid="stMetricLabel"]{font-weight:600}.date-tile{background:#edf3ed;color:#173f32;border-radius:12px;padding:12px;text-align:center;font-size:26px;font-weight:750}.date-tile small{display:block;font-size:12px;font-weight:500}.badge{display:inline-block;padding:3px 9px;border-radius:6px;font-size:12px;margin:0 5px 6px 0;background:#e7eee7;color:#265a43}.badge.variable{background:#fff1da;color:#865509}.badge.card{background:#eee9ff;color:#604593}.badge.once{background:#e5efff;color:#3562a2}
 [role="tab"]{padding:12px 20px!important;border-radius:10px 10px 0 0!important} [aria-selected="true"][role="tab"]{background:#e7efdf;color:#194b36}
 .stButton>button{border-radius:9px;min-height:42px} [data-testid="stVerticalBlockBorderWrapper"]{background:white;border-radius:14px}
 .hero{background:#173f32;padding:25px 30px;border-radius:16px;color:white;margin:0 0 24px}.hero h2{color:white;margin:0;font-size:26px}.hero p{margin:8px 0 0;color:#c6d8c6;font-size:14px}
@@ -183,6 +186,96 @@ def choose_source(method, existing=''):
 def dismiss_dialog():
     st.session_state.pop('active_dialog', None)
 
+TYPE_LABELS = {'fixed': '고정', 'variable': '변동', 'card': '카드 청구', 'once': '일회성', 'installment': '할부'}
+SCOPE_LABELS = {'personal': '개인', 'business': '사업장', 'all': '전체'}
+
+@st.dialog('출금 항목 등록', width='large', on_dismiss=dismiss_dialog)
+def expense_dialog(id=None, preset=None):
+    if not DEMO: authenticated()
+    old = deepcopy(item(DATA, 'bills', id)) if id else None
+    x = old or {}
+    choices = ['fixed', 'variable', 'card', 'once']
+    kind = st.radio('지출 종류', choices, index=index(choices, expense_type(x) if old else preset or 'fixed'),
+                    format_func=lambda k: {'fixed': '고정 지출', 'variable': '변동 지출', 'card': '카드 청구액', 'once': '일회성 지출'}[k], horizontal=True)
+    with st.form('expense-form'):
+        name = st.text_input('납부 항목', x.get('name', ''), placeholder='예: 사업장 전기료 / KB국민카드 / 보험료', max_chars=100)
+        scope = st.radio('개인 / 사업장', ['personal', 'business'], index=index(['personal', 'business'], x.get('scope', 'personal')), format_func=lambda v: SCOPE_LABELS[v], horizontal=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            amount = x.get('amount', 0)
+            if kind in ('variable', 'card'):
+                st.info('매월 청구액을 입력하는 항목입니다. 처음에는 금액 미정으로 표시됩니다.')
+            else:
+                amount = st.number_input('매달 나가는 금액 (원)' if kind == 'fixed' else '나갈 금액 (원)', min_value=0, max_value=999999999999, value=amount, step=1000)
+        with c2:
+            if kind == 'once':
+                single_date = st.date_input('출금 날짜', date.fromisoformat(due(x.get('start') or MONTH, x.get('day', TODAY.day))))
+                day = single_date.day; start = end = single_date.strftime('%Y-%m')
+            else:
+                day = st.number_input('매달 몇 일에 나가나요?', min_value=1, max_value=31, value=x.get('day', 25))
+                start = x.get('start', MONTH); end = x.get('end', '')
+        method = x.get('method', 'account')
+        if method == 'card' and kind != 'card':
+            st.caption('이 항목은 카드 사용 내역입니다. 출금 합계에는 카드 청구액만 반영됩니다.')
+        if kind == 'card': method = 'account'
+        source = choose_source(method, x.get('source', ''))
+        if kind != 'once':
+            with st.expander('시작 / 종료 월 (선택)'):
+                c1, c2 = st.columns(2)
+                with c1: start = st.text_input('시작 월', start, placeholder='2026-10')
+                with c2: end = st.text_input('종료 월', end, placeholder='비워두면 계속')
+        note = st.text_input('메모 (선택)', x.get('note', ''), max_chars=300)
+        submitted = st.form_submit_button('저장하기' if DEMO else '구글에 저장하기', type='primary', width='stretch')
+    if submitted:
+        try:
+            if not name.strip(): raise ValueError('납부 항목을 입력해 주세요.')
+            if not source: raise ValueError('출금 통장을 먼저 등록하고 선택해 주세요.')
+            obj = {**x, 'id': id or uid(), 'name': name.strip(), 'scope': scope, 'expenseType': kind,
+                   'amount': amount, 'day': day, 'start': start, 'end': end, 'method': method, 'source': source,
+                   'variable': kind in ('variable', 'card'), 'category': '카드대금' if kind == 'card' else (x.get('category', '기타') if x.get('category') != '카드대금' else '기타'), 'note': note}
+            new = deepcopy(DATA); new['bills'] = [b for b in new['bills'] if b['id'] != obj['id']] + [obj]; validate(new)
+            commit(event(DATA, [operation(DATA, 'bills', obj['id'], obj)], name.strip() + ' 출금 항목 저장'))
+        except Exception as exc: st.error(str(exc))
+
+def open_expense(preset=None):
+    st.session_state.active_dialog = {'type': 'expense', 'preset': preset}
+    st.rerun()
+
+@st.dialog('카드 할부 등록', width='large', on_dismiss=dismiss_dialog)
+def installment_dialog(id=None):
+    if not DEMO: authenticated()
+    x = deepcopy(item(DATA, 'bills', id)) if id else {}
+    parents = [b for b in DATA['bills'] if expense_type(b) == 'card' and b['method'] == 'account']
+    if not parents:
+        st.info('먼저 카드 청구 항목의 결제일과 출금 통장을 등록하세요.')
+        if st.button('카드 청구 항목 등록', type='primary'): open_expense('card')
+        return
+    with st.form('installment-form'):
+        name = st.text_input('할부 내용', x.get('name', ''), placeholder='예: 쿠팡 냉장고', max_chars=100)
+        options = [b['id'] for b in parents]
+        parent_id = st.selectbox('합산될 카드 청구 항목', options, index=index(options, x.get('parentBill')), format_func=lambda v: item(DATA, 'bills', v)['name'])
+        total = st.number_input('할부 원금 총액 (원)', min_value=1, max_value=999999999999, value=x.get('total', 1200000), step=10000)
+        months = st.number_input('할부 개월 수', min_value=1, max_value=120, value=x.get('months', 6))
+        first = st.date_input('첫 청구 월', date.fromisoformat(x.get('firstMonth', MONTH) + '-01'), help='구매 월이 아닌 첫 할부금이 청구되는 월을 선택하세요. 날짜는 무시됩니다.').strftime('%Y-%m')
+        note = st.text_input('메모 (선택)', x.get('note', ''), max_chars=300)
+        st.caption('원금 균등 분할 예상입니다. 이자·수수료는 카드 청구액에 포함해서 입력하세요.')
+        submitted = st.form_submit_button('할부 저장', type='primary', width='stretch')
+    if submitted:
+        try:
+            if not name.strip(): raise ValueError('할부 내용을 입력해 주세요.')
+            parent = item(DATA, 'bills', parent_id)
+            obj = {**x, 'id': id or uid(), 'name': name.strip(), 'expenseType': 'installment',
+                   'parentBill': parent_id, 'total': total, 'months': months, 'firstMonth': first,
+                   'start': first, 'end': add_months(first, months - 1), 'day': parent['day'], 'amount': 0,
+                   'category': '카드대금', 'method': 'account', 'source': parent['source'], 'scope': parent.get('scope', 'personal'), 'note': note}
+            new = deepcopy(DATA); new['bills'] = [b for b in new['bills'] if b['id'] != obj['id']] + [obj]; validate(new)
+            commit(event(DATA, [operation(DATA, 'bills', obj['id'], obj)], name.strip() + ' 할부 저장'))
+        except Exception as exc: st.error(str(exc))
+
+def open_installment(id=None):
+    st.session_state.active_dialog = {'type': 'installment', 'id': id}
+    st.rerun()
+
 @st.dialog('받은 돈 기록', on_dismiss=dismiss_dialog)
 def receipt_dialog(id=None):
     if not DEMO: authenticated()
@@ -192,6 +285,7 @@ def receipt_dialog(id=None):
                       index=index(['cash', 'account'], x.get('method', 'cash')),
                       format_func=lambda v: {'cash': '현금', 'account': '계좌 입금'}[v], horizontal=True)
     with st.form('receipt-form'):
+        scope = st.radio('기록 구분', ['personal', 'business'], index=index(['personal', 'business'], x.get('scope', 'personal')), format_func=lambda v: SCOPE_LABELS[v], horizontal=True)
         sender = st.text_input('누구에게 받았나요?', x.get('sender', x.get('name', '')), placeholder='예: 엄마', max_chars=100)
         amount = st.number_input('받은 금액 (원)', min_value=0, max_value=999999999999, value=x.get('amount', 0), step=10000)
         default_date = date.fromisoformat(x['date']) if x.get('date') else (TODAY if MONTH == TODAY.strftime('%Y-%m') else date.fromisoformat(MONTH + '-01'))
@@ -206,7 +300,7 @@ def receipt_dialog(id=None):
             if method == 'account' and not source: raise ValueError('입금받은 통장을 선택해 주세요. 통장은 통장·카드 메뉴에서 등록할 수 있습니다.')
             obj = {**x, 'id': id or uid(), 'name': sender.strip(), 'sender': sender.strip(), 'type': 'income',
                    'amount': amount, 'date': received_date, 'method': method, 'source': source,
-                   'category': x.get('category', '기타'), 'eligible': False, 'note': note}
+                   'category': x.get('category', '기타'), 'eligible': False, 'note': note, 'scope': scope}
             new = deepcopy(DATA); new['transactions'] = [t for t in new['transactions'] if t['id'] != obj['id']] + [obj]; validate(new)
             commit(event(DATA, [operation(DATA, 'transactions', obj['id'], obj)], sender.strip() + ' 받은 돈 ' + ('수정' if old else '추가')))
         except Exception as exc: st.error(str(exc))
@@ -296,6 +390,9 @@ def delete_dialog(kind, id):
     x = item(DATA, kind, id)
     st.write(f"‘{x['name']}’을 삭제할까요?")
     if kind == 'bills': st.caption('기존 납부 기록은 납부내역에 유지됩니다.')
+    if kind == 'bills' and installment_details(DATA, id):
+        st.info('연결된 할부 내역을 먼저 다른 카드 청구 항목으로 옮기거나 삭제하세요.')
+        return
     if kind in ('accounts', 'cards'):
         method = 'account' if kind == 'accounts' else 'card'
         used = any(t.get('method') == method and t.get('source') == id for t in DATA['bills'] + DATA['transactions']) or (kind == 'accounts' and any(c.get('account') == id for c in DATA['cards']))
@@ -327,6 +424,9 @@ def monthly_amount_dialog(bill):
     if not DEMO: authenticated()
     st.write(f"{MONTH} / {bill['name']}")
     st.caption('이 달의 청구액만 저장합니다. 다른 달의 금액은 바뀌지 않습니다.')
+    if expense_type(bill) == 'card':
+        st.info('이번 달 할부 원금 예상: ' + money(installment_estimate(DATA, bill['id'], MONTH)))
+        st.caption('아래에는 할부와 일시불, 이자 등을 포함한 카드 명세서 총 청구액을 입력하세요. 할부 원금을 따로 더하지 않습니다.')
     with st.form('monthly-amount'):
         amount = st.number_input('이번 달 청구액 (원)', min_value=0, max_value=999999999999,
                                  value=bill.get('monthlyAmounts', {}).get(MONTH), step=1000, placeholder='고지서 금액')
@@ -345,7 +445,8 @@ def open_monthly_amount(bill):
 
 def open_editor(kind, id=None, pre_card=None):
     receipt = kind == 'transactions' and not pre_card and (not id or item(DATA, kind, id).get('type') == 'income')
-    st.session_state.active_dialog = {'type': 'receipt' if receipt else 'edit', 'kind': kind, 'id': id, 'pre_card': pre_card}
+    type_ = 'receipt' if receipt else ('installment' if kind == 'bills' and id and expense_type(item(DATA, kind, id)) == 'installment' else 'expense' if kind == 'bills' else 'edit')
+    st.session_state.active_dialog = {'type': type_, 'kind': kind, 'id': id, 'pre_card': pre_card}
     st.rerun()
 def open_delete(kind, id):
     st.session_state.active_dialog = {'type': 'delete', 'kind': kind, 'id': id}
@@ -361,18 +462,29 @@ def row_controls(kind, x, prefix):
     with b:
         if st.button('삭제', key=prefix + ':del:' + x['id'], width='stretch'): open_delete(kind, x['id'])
 def payment_row(b, prefix):
-    p = paid(DATA, b['id'], MONTH)
-    amount = bill_amount(DATA, b, MONTH)
+    p = paid(DATA, b['id'], MONTH); amount = bill_amount(DATA, b, MONTH); kind = expense_type(b)
+    day = int(due(MONTH, b['day'])[-2:])
     with st.container(border=True):
-        a, bcol, c = st.columns([4, 2, 2], vertical_alignment='center')
-        with a:
+        d, title, value, actions = st.columns([0.8, 3.2, 1.6, 1.8], vertical_alignment='center')
+        with d: st.markdown(f'<div class="date-tile">{day:02d}<small>{int(MONTH[-2:])}월</small></div>', unsafe_allow_html=True)
+        with title:
+            st.markdown(f'<span class="badge {kind}">{TYPE_LABELS[kind]}</span><span class="badge">{SCOPE_LABELS[b.get("scope", "personal")]}</span>', unsafe_allow_html=True)
             st.markdown(f"**{b['name']}**")
-            st.caption(f"{int(due(MONTH, b['day'])[-2:])}일 / {source_name(DATA, b['method'], b['source'])} → {b.get('payee') or b['category']}")
-        with bcol: st.markdown('**' + (money(amount) if amount is not None else '금액 미정') + '**')
-        with c:
-            if st.button('✓ 완료' if p else '완료 체크', key=prefix + ':pay:' + b['id'], type='secondary' if p else 'primary', width='stretch'): open_payment(b)
-        if b.get('variable') and not p:
-            if st.button('이번 달 금액 수정' if amount is not None else '이번 달 금액 입력', key=prefix + ':amount:' + b['id']): open_monthly_amount(b)
+            st.caption(source_name(DATA, b['method'], b['source']) + (f" / {b['note']}" if b.get('note') else ''))
+            if p: st.caption('납부일 ' + p['date'])
+            elif MONTH == TODAY.strftime('%Y-%m') and day < TODAY.day: st.caption('출금 확인 필요')
+        with value:
+            st.markdown('### ' + amount_label(amount))
+            if kind == 'card':
+                estimate = installment_estimate(DATA, b['id'], MONTH)
+                if estimate: st.caption('이 중 할부 원금 예상 ' + money(estimate))
+        with actions:
+            if b.get('variable') and not p:
+                if st.button('금액 수정' if amount is not None else '금액 입력', key=prefix + ':amount:' + b['id'], width='stretch'): open_monthly_amount(b)
+            if st.button('✓ 납부 완료' if p else '완료 체크', key=prefix + ':pay:' + b['id'], type='secondary' if p else 'primary', width='stretch'): open_payment(b)
+        if kind == 'card' and installment_details(DATA, b['id'], MONTH):
+            with st.expander('이번 달 할부 상세'):
+                df_table([{'할부 내용': x['name'], '이번 달 예상(원)': installment_amount(x, MONTH), '마지막 청구 월': add_months(x['firstMonth'], x['months']-1)} for x in installment_details(DATA, b['id'], MONTH)])
 
 def table_rows(tx):
     types = {'income': '수입', 'expense': '지출', 'refund': '환불', 'transfer': '이체'}
@@ -382,66 +494,71 @@ def df_table(rows):
     else: st.caption('아직 기록이 없습니다.')
 
 with st.sidebar:
-    st.header('우리집 금융관리')
+    st.header('내 출금 캘린더')
     selected = st.date_input('조회할 달', value=TODAY.replace(day=1), help='선택한 달 전체를 조회합니다.')
     MONTH = selected.strftime('%Y-%m')
-    if st.button('＋ 받은 돈 기록', type='primary', width='stretch'): open_editor('transactions')
+    SCOPE = st.radio('조회 구분', ['all', 'personal', 'business'], format_func=lambda v: SCOPE_LABELS[v], horizontal=True)
+    if st.button('＋ 출금 항목 등록', type='primary', width='stretch'): open_expense()
+    if st.button('＋ 받은 돈 기록', width='stretch'): open_editor('transactions')
     if st.button('자료 새로고침', width='stretch'):
         if not DEMO:
             try:
-                st.session_state.data, _ = store().load()
-                flash('최신 구글 자료를 불러왔습니다.')
+                st.session_state.data, _ = store().load(); flash('최신 구글 자료를 불러왔습니다.')
             except Exception as exc: st.error(str(exc))
         else: st.toast('예시 자료입니다.')
     st.divider()
-    st.caption('예시 모드 / 구글 저장 안 됨' if DEMO else '저장 위치: Google Sheets')
+    st.caption('예시 모드 / 구글 저장 안 됨' if DEMO else 'Google Sheets에 저장')
     if not DEMO: st.caption('로그인: ' + st.session_state.login_email)
     if st.button('예시 종료' if DEMO else '로그아웃', width='stretch'): logout_session()
 if DEMO: st.warning('예시 화면입니다. 입력과 수정은 가능하지만 구글에는 저장되지 않습니다.')
 if st.session_state.get('notice'): st.success(st.session_state.pop('notice'))
-st.markdown('<div class="hero"><h2>우리집 금융관리</h2><p>매달 나가는 돈과 받은 돈, 간단하게 기록하세요.</p></div>', unsafe_allow_html=True)
-tabs = st.tabs(['홈', '자동이체', '받은 돈', '납부내역', '통장·카드'])
-bills = sorted(active(DATA, MONTH), key=lambda b: (b['day'], b['name']))
+st.markdown(f'<div class="hero"><h2>내 지출 캘린더</h2><p>{int(MONTH[:4])}년 {int(MONTH[-2:])}월 · {SCOPE_LABELS[SCOPE]} — 언제, 어느 통장에서, 얼마가 나가는지.</p></div>', unsafe_allow_html=True)
+tabs = st.tabs(['이번 달', '지출 항목', '할부 관리', '받은 돈', '설정'])
+bills = sorted(scheduled(DATA, MONTH, SCOPE), key=lambda b: (b['day'], b['name']))
 pending_bills = [b for b in bills if not paid(DATA, b['id'], MONTH)]
-receipts = [t for t in transactions(DATA, MONTH) if t['type'] == 'income']
+completed_bills = [b for b in bills if paid(DATA, b['id'], MONTH)]
+receipts = [t for t in transactions(DATA, MONTH) if t['type'] == 'income' and in_scope(t, SCOPE)]
 with tabs[0]:
     if not DATA['accounts']:
-        st.info('자동이체를 관리하려면 출금 통장부터 등록하세요. 받은 현금은 바로 기록할 수 있어요.')
+        st.info('출금 통장의 이름만 등록하면 시작할 수 있어요. 잔액은 필요 없습니다.')
         if st.button('통장 등록', key='start-account', type='primary'): open_editor('accounts')
-    c = st.columns(3)
-    c[0].metric('이번 달 나갈 돈', summary_label(bills))
-    c[1].metric('남은 납부 예정', summary_label(pending_bills), f'{len(pending_bills)}건 남음', delta_color='off')
-    c[2].metric('이번 달 받은 돈', money(sum(t['amount'] for t in receipts)))
-    left, right = st.columns([1.3, 1])
-    with left:
-        st.subheader('이번 달 자동이체')
-        if st.button('＋ 자동이체 등록', key='home-new-bill', type='primary'): open_editor('bills')
-        for b in bills: payment_row(b, 'home')
-        if not bills: st.caption('관리비, 통신비, 보험료처럼 매달 나가는 돈을 등록하세요.')
-    with right:
-        st.subheader('최근 받은 돈')
-        for t in sorted(receipts, key=lambda t: t['date'], reverse=True)[:5]:
-            with st.container(border=True):
-                st.markdown(f"**{t.get('sender', t['name'])} / {money(t['amount'])}**")
-                st.caption(f"{t['date']} / {source_name(DATA, t['method'], t['source'])}" + (f" / {t['note']}" if t.get('note') else ''))
-        if not receipts: st.caption('왼쪽 ‘받은 돈 기록’ 버튼으로 현금이나 입금을 기록하세요.')
-        if DATA['accounts']:
-            st.subheader('통장별 이번 달 출금')
-            for account in DATA['accounts']:
-                linked = [b for b in bills if b['method'] == 'account' and b['source'] == account['id']]
-                if linked: st.write(f"**{account['name']}** / {summary_label(linked)}")
-with tabs[1]:
-    st.subheader('매달 나가는 돈')
-    if st.button('＋ 자동이체 등록', key='new-bill', type='primary'): open_editor('bills')
-    st.caption('은행에서 실제 출금된 것을 확인한 뒤 완료 체크하세요.')
-    for b in sorted(DATA['bills'], key=lambda b: (b['day'], b['name'])):
-        with st.expander(f"매월 {b['day']}일 / {b['name']} / {amount_label(bill_amount(DATA, b, MONTH))}"):
-            st.write(f"출금: {source_name(DATA, b['method'], b['source'])}")
-            if b.get('note'): st.caption(b['note'])
-            row_controls('bills', b, 'bill')
-            if b in bills: payment_row(b, 'bill')
-    if not DATA['bills']: st.info('예: 관리비, 통신비, 보험료, 대출이자, 카드대금 출금')
-    with st.expander('이번 달 달력 보기'):
+    cards = [b for b in bills if expense_type(b) == 'card']
+    fixed = [b for b in bills if expense_type(b) == 'fixed']
+    variable = [b for b in bills if expense_type(b) == 'variable']
+    once = [b for b in bills if expense_type(b) == 'once']
+    c = st.columns(4)
+    c[0].metric('고정 지출', summary_label(fixed)); c[1].metric('변동 지출', summary_label(variable))
+    c[2].metric('카드 청구액', summary_label(cards)); c[3].metric('이번 달 확인된 총액', money(bill_summary(DATA, bills, MONTH)[0]))
+    unknown = bill_summary(DATA, bills, MONTH)[1]
+    if unknown: st.warning(f'청구액 미입력 {unknown}건 — 입력된 금액만 합산했습니다.')
+    if once: st.caption('일회성 지출 ' + summary_label(once) + ' 포함')
+    st.caption('할부 상세는 카드 청구액에 포함되며 총액에 따로 더하지 않습니다.')
+    left, right = st.columns([3, 2])
+    with left: st.write('**남은 출금** ' + summary_label(pending_bills) + f' / {len(pending_bills)}건')
+    with right: st.write(f'**납부 완료** {len(completed_bills)}건 / ' + money(bill_summary(DATA, completed_bills, MONTH)[0]))
+    previous = add_months(MONTH, -1); previous_bills = scheduled(DATA, previous, SCOPE)
+    if previous_bills:
+        prev_total, prev_unknown = bill_summary(DATA, previous_bills, previous); current_total = bill_summary(DATA, bills, MONTH)[0]
+        if unknown or prev_unknown: st.caption(f'전월 확인액 {money(prev_total)} / 이번 달 확인액 {money(current_total)} — 미입력 금액이 있어 최종 증감은 아직 미정입니다.')
+        else: st.caption(f'전월 {money(prev_total)} 대비 ' + (f'{money(current_total-prev_total)} 증가' if current_total>=prev_total else f'{money(prev_total-current_total)} 감소'))
+    bar = st.columns([3, 1])
+    with bar[0]: view = st.radio('일정 보기', ['날짜순', '고정 / 변동 구분'], horizontal=True, label_visibility='collapsed')
+    with bar[1]:
+        if st.button('＋ 지출 등록', key='home-new-bill', width='stretch'): open_expense()
+    if view == '날짜순':
+        st.subheader('앞으로 나갈 돈')
+        for b in pending_bills: payment_row(b, 'home')
+    else:
+        for kind in ('fixed', 'variable', 'card', 'once'):
+            subset = [b for b in pending_bills if expense_type(b) == kind]
+            if subset:
+                st.subheader(TYPE_LABELS[kind] + ' 지출')
+                for b in subset: payment_row(b, 'home')
+    if not pending_bills: st.info('이번 달 남은 출금 일정이 없습니다.')
+    if completed_bills:
+        with st.expander(f'납부 완료 {len(completed_bills)}건'):
+            for b in completed_bills: payment_row(b, 'home')
+    with st.expander('출금 달력 보기'):
         weeks = calendar.Calendar(firstweekday=6).monthdayscalendar(int(MONTH[:4]), int(MONTH[-2:]))
         markup = '<table class="calendar"><tr>' + ''.join(f'<th>{d}</th>' for d in ['일', '월', '화', '수', '목', '금', '토']) + '</tr>'
         for week in weeks:
@@ -449,16 +566,60 @@ with tabs[1]:
             for day in week:
                 markup += '<td>' + (str(day) if day else '')
                 if day:
-                    for b in active(DATA, MONTH):
+                    for b in bills:
                         if int(due(MONTH, b['day'])[-2:]) == day:
                             p = paid(DATA, b['id'], MONTH)
                             markup += f'<div class="calitem {"calpaid" if p else ""}">{"✓ " if p else ""}{html.escape(b["name"])}<br>{amount_label(bill_amount(DATA, b, MONTH))}</div>'
                 markup += '</td>'
             markup += '</tr>'
         st.markdown(markup + '</table>', unsafe_allow_html=True)
-        st.write('')
-        for b in sorted(active(DATA, MONTH), key=lambda x: x['day']): payment_row(b, 'calendar')
+with tabs[1]:
+    st.subheader('등록한 지출 항목')
+    c = st.columns(3)
+    with c[0]:
+        if st.button('＋ 고정 / 변동 등록', key='new-bill', type='primary'): open_expense()
+    with c[1]:
+        if st.button('＋ 카드 청구 등록'): open_expense('card')
+    with c[2]:
+        if st.button('＋ 일회성 등록'): open_expense('once')
+    kind_filter = st.radio('항목 구분', ['all', 'fixed', 'variable', 'card', 'once'], format_func=lambda v: '전체' if v == 'all' else TYPE_LABELS[v], horizontal=True)
+    for b in sorted(DATA['bills'], key=lambda b: (b['day'], b['name'])):
+        if expense_type(b) == 'installment' or not in_scope(b, SCOPE) or (kind_filter != 'all' and expense_type(b) != kind_filter): continue
+        with st.container(border=True):
+            title, controls = st.columns([3, 1])
+            with title:
+                st.markdown(f"**{b['name']}** / {TYPE_LABELS[expense_type(b)]} / {SCOPE_LABELS[b.get('scope','personal')]}")
+                st.caption(f"{b['day']}일 / {source_name(DATA, b['method'], b['source'])} / 기간 {b.get('start') or '계속'} ~ {b.get('end') or '계속'}")
+                if b['method'] == 'card': st.caption('카드 사용 항목 — 통장 출금 합계에는 카드 명세서 청구액으로 반영됩니다.')
+            with controls: row_controls('bills', b, 'bill')
+    with st.expander('이번 달 납부 기록 / 이전 사용내역'):
+        tx = sorted([t for t in transactions(DATA, MONTH) if t['type'] != 'income' and in_scope(t, SCOPE)], key=lambda t: t['date'], reverse=True)
+        df_table([{'날짜': t['date'], '항목': t['name'], '금액(원)': t['amount'], '출금 수단': source_name(DATA, t['method'], t['source'])} for t in tx])
+        for t in tx:
+            with st.expander(f"{t['date']} / {t['name']} / {money(t['amount'])}"): row_controls('transactions', t, 'history')
 with tabs[2]:
+    st.subheader('카드 할부')
+    if st.button('＋ 할부 등록', key='new-installment', type='primary'): open_installment()
+    st.info('할부는 카드 청구액의 상세내역입니다. 카드 청구 총액을 입력하면 출금 합계에 한 번만 반영됩니다.')
+    details = [b for b in DATA['bills'] if expense_type(b) == 'installment' and in_scope(b, SCOPE)]
+    current = [b for b in details if b['firstMonth'] <= MONTH <= add_months(b['firstMonth'], b['months'] - 1)]
+    st.metric('이번 달 할부 원금 예상', money(sum(installment_amount(b, MONTH) for b in current)))
+    mode = st.radio('할부 표시', ['진행 / 예정', '종료', '전체'], horizontal=True)
+    for b in sorted(details, key=lambda b: (b['firstMonth'], b['name'])):
+        end = add_months(b['firstMonth'], b['months']-1); finished = MONTH > end
+        if (mode == '진행 / 예정' and finished) or (mode == '종료' and not finished): continue
+        parent = item(DATA, 'bills', b['parentBill']); y,m=map(int,MONTH.split('-')); fy,fm=map(int,b['firstMonth'].split('-'))
+        elapsed = (y-fy)*12 + m-fm; before = max(0, min(b['months'], elapsed))
+        with st.container(border=True):
+            st.markdown(f"**{b['name']}** / {parent['name']}")
+            c1,c2,c3=st.columns(3)
+            c1.metric('원금 총액', money(b['total'])); c2.metric('이번 달 예상', money(installment_amount(b, MONTH))); c3.metric('남은 예정 회차', str(b['months']-before)+'회')
+            st.progress(before / b['months'])
+            st.caption(f"첫 청구 {b['firstMonth']} → 마지막 {end} / 총 {b['months']}개월 / " + ('종료' if finished else '청구 시작 전' if elapsed < 0 else f'{elapsed+1}회차 예정'))
+            st.caption('회차는 청구 월 기준이며 실제 납부 여부는 카드 청구 항목에서 확인합니다.')
+            row_controls('bills', b, 'installment')
+    if not details: st.caption('구매 내용, 총액, 할부 개월 수, 첫 청구 월을 등록하세요.')
+with tabs[3]:
     st.subheader('받은 돈')
     if st.button('＋ 받은 돈 기록', key='new-tx', type='primary'): open_editor('transactions')
     st.metric('이번 달 받은 돈 합계', money(sum(t['amount'] for t in receipts)))
@@ -468,29 +629,18 @@ with tabs[2]:
     for t in tx:
         with st.expander(f"{t['date']} / {t.get('sender', t['name'])} / {money(t['amount'])}"):
             row_controls('transactions', t, 'receipt')
-with tabs[3]:
-    st.subheader('납부한 내역')
-    tx = sorted([t for t in transactions(DATA, MONTH) if t['type'] != 'income'], key=lambda t: t['date'], reverse=True)
-    df_table([{'날짜': t['date'], '항목': t['name'], '금액(원)': t['amount'],
-               '통장 / 카드': source_name(DATA, t['method'], t['source']), '메모': t.get('note', '')} for t in tx])
-    st.caption('자동이체에서 완료 체크한 내역이 여기에 남습니다. 이전 버전의 사용내역도 유지됩니다.')
-    for t in tx:
-        with st.expander(f"{t['date']} / {t['name']} / {money(t['amount'])}"):
-            row_controls('transactions', t, 'history')
+
 with tabs[4]:
     st.subheader('출금 통장')
     if st.button('＋ 통장 등록', key='new-account', type='primary'): open_editor('accounts')
-    st.caption('돈이 빠지는 통장 이름만 등록하세요.')
+    st.caption('통장 이름과 은행만 입력하세요. 잔액 입력은 필요 없습니다.')
     for a in DATA['accounts']:
         with st.container(border=True):
-            st.markdown(f"**{a['name']}**")
-            st.caption(a.get('bank', ''))
-            row_controls('accounts', a, 'account')
-    with st.expander('카드 관리 (카드로 정기 결제하는 경우)'):
+            st.markdown(f"**{a['name']}**"); st.caption(a.get('bank','')); row_controls('accounts',a,'account')
+    with st.expander('이전 카드 등록 정보'):
         if st.button('＋ 카드 등록', key='new-card'): open_editor('cards')
         for card in DATA['cards']:
-            st.markdown(f"**{card['name']}**")
-            row_controls('cards', card, 'card')
+            st.markdown(f"**{card['name']}**"); row_controls('cards',card,'card')
     with st.expander('백업과 복원'):
         st.download_button('전체 JSON 백업 다운로드', json.dumps(DATA, ensure_ascii=False, indent=2), f'우리집_전체백업_{TODAY}.json', mime='application/json')
         with st.expander('백업 파일 복원'):
@@ -502,11 +652,15 @@ with tabs[4]:
                     new = validate(json.loads(uploaded.getvalue()))
                     commit(restore_event(DATA, {k: new[k] for k in ('version', *KINDS)}))
                 except Exception as exc: st.error(str(exc))
+
     st.caption('가족의 변경 사항은 자료 새로고침으로 확인하세요.')
+    st.caption('출금은 은행에서 직접 확인합니다. 이 앱은 일정과 기록을 관리합니다.')
 
 if st.session_state.get('active_dialog'):
     dialog = st.session_state.active_dialog
     if dialog['type'] == 'receipt': receipt_dialog(dialog.get('id'))
+    elif dialog['type'] == 'expense': expense_dialog(dialog.get('id'), dialog.get('preset'))
+    elif dialog['type'] == 'installment': installment_dialog(dialog.get('id'))
     elif dialog['type'] == 'edit': edit_dialog(dialog['kind'], dialog.get('id'), dialog.get('pre_card'))
     elif dialog['type'] == 'delete': delete_dialog(dialog['kind'], dialog['id'])
     elif dialog['type'] == 'pay': payment_dialog(item(DATA, 'bills', dialog['id']))

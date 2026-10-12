@@ -14,7 +14,27 @@ def item(data, kind, id): return next((x for x in data[kind] if x['id'] == id), 
 def due(month, day):
     y, m = map(int, month.split('-'))
     return date(y, m, min(int(day), monthrange(y, m)[1])).isoformat()
-def active(data, month): return [b for b in data['bills'] if (not b.get('start') or b['start'] <= month) and (not b.get('end') or b['end'] >= month)]
+def active(data, month): return [b for b in data['bills'] if b.get('expenseType') != 'installment' and (not b.get('start') or b['start'] <= month) and (not b.get('end') or b['end'] >= month)]
+def expense_type(bill):
+    return bill.get('expenseType') or ('card' if bill.get('category') == '카드대금' else 'variable' if bill.get('variable') else 'fixed')
+def in_scope(record, scope): return scope == 'all' or record.get('scope', 'personal') == scope
+def scheduled(data, month, scope='all'):
+    # A charge made on a credit card is part of the card statement, not another bank withdrawal.
+    return [b for b in active(data, month) if b['method'] != 'card' and in_scope(b, scope)]
+def add_months(month, count):
+    y, m = map(int, month.split('-')); n = y * 12 + m - 1 + count
+    return f'{n // 12:04d}-{n % 12 + 1:02d}'
+def installment_amount(bill, month):
+    first = bill['firstMonth']; y, m = map(int, month.split('-')); fy, fm = map(int, first.split('-'))
+    offset = (y - fy) * 12 + m - fm
+    if not 0 <= offset < bill['months']: return 0
+    base, remainder = divmod(bill['total'], bill['months'])
+    return base + (remainder if offset == bill['months'] - 1 else 0)
+def installment_details(data, parent_id, month=None):
+    return [b for b in data['bills'] if b.get('expenseType') == 'installment' and b.get('parentBill') == parent_id
+            and (month is None or b['firstMonth'] <= month <= add_months(b['firstMonth'], b['months'] - 1))]
+def installment_estimate(data, parent_id, month):
+    return sum(installment_amount(b, month) for b in installment_details(data, parent_id, month))
 def transactions(data, month): return [t for t in data['transactions'] if t['date'][:7] == month]
 def signed(t): return int(t['amount']) if t['type'] == 'expense' else -int(t['amount']) if t['type'] == 'refund' else 0
 def totals(data, month):
@@ -56,6 +76,17 @@ def validate(data):
                 if not isinstance(x.get(field), int) or isinstance(x[field], bool) or not 0 <= x[field] <= 999999999999: raise ValueError('금액은 0 이상의 정수로 입력하세요.')
             if k in ('bills', 'cards') and (not isinstance(x.get('day'), int) or not 1 <= x['day'] <= 31): raise ValueError('납부일은 1~31일입니다.')
             if k == 'bills':
+                if x.get('expenseType') not in (None, 'fixed', 'variable', 'card', 'once', 'installment'): raise ValueError('잘못된 지출 구분입니다.')
+                if x.get('scope', 'personal') not in ('personal', 'business'): raise ValueError('잘못된 개인 / 사업장 구분입니다.')
+                if x.get('expenseType') == 'once' and (not x.get('start') or x.get('start') != x.get('end')): raise ValueError('일회성 지출은 한 달에만 등록하세요.')
+                if x.get('expenseType') == 'installment':
+                    if not isinstance(x.get('total'), int) or isinstance(x['total'], bool) or not 1 <= x['total'] <= 999999999999: raise ValueError('할부 총액을 확인하세요.')
+                    if not isinstance(x.get('months'), int) or isinstance(x['months'], bool) or not 1 <= x['months'] <= 120: raise ValueError('할부 개월 수는 1~120입니다.')
+                    first = x.get('firstMonth', '')
+                    if not isinstance(first, str) or datetime.strptime(first, '%Y-%m').strftime('%Y-%m') != first: raise ValueError('첫 청구 월은 YYYY-MM 형식입니다.')
+                    parent = item(data, 'bills', x.get('parentBill'))
+                    if not parent or expense_type(parent) != 'card' or parent['method'] != 'account': raise ValueError('할부를 연결할 카드 청구 항목이 필요합니다.')
+                    if x.get('scope', 'personal') != parent.get('scope', 'personal'): raise ValueError('할부와 카드 청구의 개인 / 사업장 구분을 맞춰 주세요.')
                 if not isinstance(x.get('variable', False), bool): raise ValueError('잘못된 요금 유형입니다.')
                 monthly = x.get('monthlyAmounts', {})
                 if not isinstance(monthly, dict): raise ValueError('잘못된 월별 청구액입니다.')
@@ -104,7 +135,7 @@ def replay(events):
 def bill_payment(data, bill, month, amount, payment_date):
     id = 'bill:' + bill['id'] + ':' + month
     if payment_date[:7] != month: raise ValueError('선택 월 안의 날짜를 입력해 주세요.')
-    t = {'id': id, 'name': bill['name'], 'amount': int(amount), 'date': payment_date, 'category': bill['category'], 'method': bill['method'], 'source': bill['source'], 'eligible': bill.get('eligible', False), 'type': 'transfer' if bill['category'] == '카드대금' else 'expense', 'billId': bill['id'], 'billMonth': month, 'note': '납부 완료'}
+    t = {'id': id, 'name': bill['name'], 'amount': int(amount), 'date': payment_date, 'category': bill['category'], 'method': bill['method'], 'source': bill['source'], 'eligible': bill.get('eligible', False), 'type': 'transfer' if bill['category'] == '카드대금' else 'expense', 'billId': bill['id'], 'billMonth': month, 'scope': bill.get('scope', 'personal'), 'note': '납부 완료'}
     return operation(data, 'transactions', id, t)
 def sample(month):
     d = empty(); a, c = 'demo-account', 'demo-card'
