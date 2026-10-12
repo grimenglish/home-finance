@@ -24,7 +24,7 @@ st.markdown('''<style>
 .stApp{background:#f6f7f3} .block-container{padding-top:2rem;max-width:1400px}
 h1,h2,h3{color:#173f32} [data-testid="stMetric"]{background:white;border:1px solid #e3e8de;padding:22px;border-radius:15px}
 [data-testid="stMetricValue"]{font-size:1.8rem} [data-testid="stTabs"] [role="tablist"]{gap:8px;border-bottom:1px solid #dce5d7}
-[data-testid="stMetricLabel"]{font-weight:600}.date-tile{background:#edf3ed;color:#173f32;border-radius:12px;padding:12px;text-align:center;font-size:26px;font-weight:750}.date-tile small{display:block;font-size:12px;font-weight:500}.badge{display:inline-block;padding:3px 9px;border-radius:6px;font-size:12px;margin:0 5px 6px 0;background:#e7eee7;color:#265a43}.badge.variable{background:#fff1da;color:#865509}.badge.card{background:#eee9ff;color:#604593}.badge.once{background:#e5efff;color:#3562a2}
+[data-testid="stMetricLabel"]{font-weight:600}.schedule-line{display:flex;align-items:center;gap:14px}.schedule-line .date-tile{min-width:50px;padding:8px;font-size:23px}.schedule-name{font-size:17px;font-weight:650;margin:2px 0}.schedule-meta{color:#6e7973;font-size:12px;margin-top:3px}.summary-chips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 18px}.summary-chip{background:#fff;border:1px solid #e1e7e1;padding:7px 12px;border-radius:9px;font-size:13px}.date-tile{background:#edf3ed;color:#173f32;border-radius:12px;padding:12px;text-align:center;font-size:26px;font-weight:750}.date-tile small{display:block;font-size:12px;font-weight:500}.badge{display:inline-block;padding:3px 9px;border-radius:6px;font-size:12px;margin:0 5px 6px 0;background:#e7eee7;color:#265a43}.badge.variable{background:#fff1da;color:#865509}.badge.card{background:#eee9ff;color:#604593}.badge.once{background:#e5efff;color:#3562a2}
 [role="tab"]{padding:12px 20px!important;border-radius:10px 10px 0 0!important} [aria-selected="true"][role="tab"]{background:#e7efdf;color:#194b36}
 .stButton>button{border-radius:9px;min-height:42px} [data-testid="stVerticalBlockBorderWrapper"]{background:white;border-radius:14px}
 .hero{background:#173f32;padding:25px 30px;border-radius:16px;color:white;margin:0 0 24px}.hero h2{color:white;margin:0;font-size:26px}.hero p{margin:8px 0 0;color:#c6d8c6;font-size:14px}
@@ -463,25 +463,26 @@ def row_controls(kind, x, prefix):
         if st.button('삭제', key=prefix + ':del:' + x['id'], width='stretch'): open_delete(kind, x['id'])
 def payment_row(b, prefix):
     p = paid(DATA, b['id'], MONTH); amount = bill_amount(DATA, b, MONTH); kind = expense_type(b)
-    day = int(due(MONTH, b['day'])[-2:])
+    day = int(due(MONTH, b['day'])[-2:]); scope = b.get('scope', 'personal')
     with st.container(border=True):
-        d, title, value, actions = st.columns([0.8, 3.2, 1.6, 1.8], vertical_alignment='center')
-        with d: st.markdown(f'<div class="date-tile">{day:02d}<small>{int(MONTH[-2:])}월</small></div>', unsafe_allow_html=True)
+        title, actions = st.columns([3, 1.8], vertical_alignment='center')
         with title:
-            st.markdown(f'<span class="badge {kind}">{TYPE_LABELS[kind]}</span><span class="badge">{SCOPE_LABELS[b.get("scope", "personal")]}</span>', unsafe_allow_html=True)
-            st.markdown(f"**{b['name']}**")
-            st.caption(source_name(DATA, b['method'], b['source']) + (f" / {b['note']}" if b.get('note') else ''))
-            if p: st.caption('납부일 ' + p['date'])
-            elif MONTH == TODAY.strftime('%Y-%m') and day < TODAY.day: st.caption('출금 확인 필요')
-        with value:
-            st.markdown('### ' + amount_label(amount))
+            meta = html.escape(source_name(DATA, b['method'], b['source']))
+            if p: meta += ' / 납부일 ' + p['date']
+            elif MONTH == TODAY.strftime('%Y-%m') and day < TODAY.day: meta += ' / 출금 확인 필요'
+            st.markdown(f'<div class="schedule-line"><div class="date-tile">{day:02d}<small>{int(MONTH[-2:])}월</small></div><div><span class="badge {kind}">{TYPE_LABELS[kind]}</span><span class="badge">{SCOPE_LABELS[scope]}</span><div class="schedule-name">{html.escape(b["name"])}</div><div class="schedule-meta">{meta}</div></div></div>', unsafe_allow_html=True)
             if kind == 'card':
                 estimate = installment_estimate(DATA, b['id'], MONTH)
-                if estimate: st.caption('이 중 할부 원금 예상 ' + money(estimate))
+                if estimate: st.caption('할부 원금 예상 ' + money(estimate) + ' 포함')
         with actions:
+            st.markdown('**' + amount_label(amount) + '**')
             if b.get('variable') and not p:
-                if st.button('금액 수정' if amount is not None else '금액 입력', key=prefix + ':amount:' + b['id'], width='stretch'): open_monthly_amount(b)
-            if st.button('✓ 납부 완료' if p else '완료 체크', key=prefix + ':pay:' + b['id'], type='secondary' if p else 'primary', width='stretch'): open_payment(b)
+                c1,c2=st.columns(2)
+                with c1:
+                    if st.button('금액 수정' if amount is not None else '금액 입력', key=prefix + ':amount:' + b['id'], width='stretch'): open_monthly_amount(b)
+                with c2:
+                    if st.button('완료 체크', key=prefix + ':pay:' + b['id'], width='stretch'): open_payment(b)
+            elif st.button('✓ 납부 완료' if p else '완료 체크', key=prefix + ':pay:' + b['id'], type='secondary', width='stretch'): open_payment(b)
         if kind == 'card' and installment_details(DATA, b['id'], MONTH):
             with st.expander('이번 달 할부 상세'):
                 df_table([{'할부 내용': x['name'], '이번 달 예상(원)': installment_amount(x, MONTH), '마지막 청구 월': add_months(x['firstMonth'], x['months']-1)} for x in installment_details(DATA, b['id'], MONTH)])
@@ -493,11 +494,17 @@ def df_table(rows):
     if rows: st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
     else: st.caption('아직 기록이 없습니다.')
 
-with st.sidebar:
-    st.header('내 출금 캘린더')
+header, period, scope_control = st.columns([2.5, 1.4, 2])
+with header:
+    st.markdown('## 내 출금 캘린더')
+    st.caption('언제 · 어느 통장에서 · 얼마가 나가는지')
+with period:
     selected = st.date_input('조회할 달', value=TODAY.replace(day=1), help='선택한 달 전체를 조회합니다.')
     MONTH = selected.strftime('%Y-%m')
+with scope_control:
     SCOPE = st.radio('조회 구분', ['all', 'personal', 'business'], format_func=lambda v: SCOPE_LABELS[v], horizontal=True)
+with st.sidebar:
+    st.header('출금 일정 관리')
     if st.button('＋ 출금 항목 등록', type='primary', width='stretch'): open_expense()
     if st.button('＋ 받은 돈 기록', width='stretch'): open_editor('transactions')
     if st.button('자료 새로고침', width='stretch'):
@@ -512,7 +519,6 @@ with st.sidebar:
     if st.button('예시 종료' if DEMO else '로그아웃', width='stretch'): logout_session()
 if DEMO: st.warning('예시 화면입니다. 입력과 수정은 가능하지만 구글에는 저장되지 않습니다.')
 if st.session_state.get('notice'): st.success(st.session_state.pop('notice'))
-st.markdown(f'<div class="hero"><h2>내 지출 캘린더</h2><p>{int(MONTH[:4])}년 {int(MONTH[-2:])}월 · {SCOPE_LABELS[SCOPE]} — 언제, 어느 통장에서, 얼마가 나가는지.</p></div>', unsafe_allow_html=True)
 tabs = st.tabs(['이번 달', '지출 항목', '할부 관리', '받은 돈', '설정'])
 bills = sorted(scheduled(DATA, MONTH, SCOPE), key=lambda b: (b['day'], b['name']))
 pending_bills = [b for b in bills if not paid(DATA, b['id'], MONTH)]
@@ -526,36 +532,32 @@ with tabs[0]:
     fixed = [b for b in bills if expense_type(b) == 'fixed']
     variable = [b for b in bills if expense_type(b) == 'variable']
     once = [b for b in bills if expense_type(b) == 'once']
-    c = st.columns(4)
-    c[0].metric('고정 지출', summary_label(fixed)); c[1].metric('변동 지출', summary_label(variable))
-    c[2].metric('카드 청구액', summary_label(cards)); c[3].metric('이번 달 확인된 총액', money(bill_summary(DATA, bills, MONTH)[0]))
-    unknown = bill_summary(DATA, bills, MONTH)[1]
-    if unknown: st.warning(f'청구액 미입력 {unknown}건 — 입력된 금액만 합산했습니다.')
-    if once: st.caption('일회성 지출 ' + summary_label(once) + ' 포함')
-    st.caption('할부 상세는 카드 청구액에 포함되며 총액에 따로 더하지 않습니다.')
-    left, right = st.columns([3, 2])
-    with left: st.write('**남은 출금** ' + summary_label(pending_bills) + f' / {len(pending_bills)}건')
-    with right: st.write(f'**납부 완료** {len(completed_bills)}건 / ' + money(bill_summary(DATA, completed_bills, MONTH)[0]))
-    previous = add_months(MONTH, -1); previous_bills = scheduled(DATA, previous, SCOPE)
-    if previous_bills:
-        prev_total, prev_unknown = bill_summary(DATA, previous_bills, previous); current_total = bill_summary(DATA, bills, MONTH)[0]
-        if unknown or prev_unknown: st.caption(f'전월 확인액 {money(prev_total)} / 이번 달 확인액 {money(current_total)} — 미입력 금액이 있어 최종 증감은 아직 미정입니다.')
-        else: st.caption(f'전월 {money(prev_total)} 대비 ' + (f'{money(current_total-prev_total)} 증가' if current_total>=prev_total else f'{money(prev_total-current_total)} 감소'))
+    total, unknown = bill_summary(DATA, bills, MONTH)
+    remaining, remaining_unknown = bill_summary(DATA, pending_bills, MONTH)
+    c = st.columns(3)
+    c[0].metric('이번 달 확인된 총액', money(total))
+    c[1].metric('앞으로 나갈 금액', money(remaining), f'{len(pending_bills)}건 남음', delta_color='off')
+    c[2].metric('금액 미입력', f'{unknown}건')
+    if unknown: st.warning(f'청구액 미입력 {unknown}건 — 위 금액은 입력된 항목만 합산한 금액입니다.')
+    groups = [('고정', fixed), ('변동', variable), ('카드 청구', cards), ('일회성', once)]
+    chips = ''.join(f'<span class="summary-chip">{title} <strong>{summary_label(rows)}</strong></span>' for title,rows in groups if rows)
+    st.markdown('<div class="summary-chips">' + chips + '</div>', unsafe_allow_html=True)
     bar = st.columns([3, 1])
-    with bar[0]: view = st.radio('일정 보기', ['날짜순', '고정 / 변동 구분'], horizontal=True, label_visibility='collapsed')
+    with bar[0]: status = st.radio('출금 목록', ['남은 출금', '금액 미입력', '전체 일정'], horizontal=True, label_visibility='collapsed')
     with bar[1]:
         if st.button('＋ 지출 등록', key='home-new-bill', width='stretch'): open_expense()
+    displayed = [b for b in pending_bills if bill_amount(DATA,b,MONTH) is None] if status == '금액 미입력' else bills if status == '전체 일정' else pending_bills
+    view = st.radio('일정 보기', ['날짜순', '고정 / 변동 구분'], horizontal=True)
     if view == '날짜순':
-        st.subheader('앞으로 나갈 돈')
-        for b in pending_bills: payment_row(b, 'home')
+        for b in displayed: payment_row(b, 'home')
     else:
         for kind in ('fixed', 'variable', 'card', 'once'):
-            subset = [b for b in pending_bills if expense_type(b) == kind]
+            subset = [b for b in displayed if expense_type(b) == kind]
             if subset:
-                st.subheader(TYPE_LABELS[kind] + ' 지출')
+                st.markdown('**' + TYPE_LABELS[kind] + '**')
                 for b in subset: payment_row(b, 'home')
-    if not pending_bills: st.info('이번 달 남은 출금 일정이 없습니다.')
-    if completed_bills:
+    if not displayed: st.info('금액 미입력 항목이 없습니다.' if status == '금액 미입력' else '표시할 출금 일정이 없습니다.')
+    if completed_bills and status != '전체 일정':
         with st.expander(f'납부 완료 {len(completed_bills)}건'):
             for b in completed_bills: payment_row(b, 'home')
     with st.expander('출금 달력 보기'):
@@ -573,6 +575,17 @@ with tabs[0]:
                 markup += '</td>'
             markup += '</tr>'
         st.markdown(markup + '</table>', unsafe_allow_html=True)
+    with st.expander('월별 요약 / 지난달 비교'):
+        st.write(f"납부 완료 {len(completed_bills)}건 / " + money(bill_summary(DATA,completed_bills,MONTH)[0]))
+        st.write('받은 돈 ' + money(sum(t['amount'] for t in receipts)))
+        previous = add_months(MONTH, -1); previous_bills = scheduled(DATA,previous,SCOPE)
+        if previous_bills:
+            prev_total, prev_unknown = bill_summary(DATA,previous_bills,previous)
+            st.write(f'전월 확인액 {money(prev_total)} / 이번 달 확인액 {money(total)}')
+            if unknown or prev_unknown: st.caption('미입력 청구액이 있어 최종 증감은 아직 미정입니다.')
+            else: st.write((f'{money(total-prev_total)} 증가' if total>=prev_total else f'{money(prev_total-total)} 감소'))
+        else: st.caption('지난달 등록된 출금 일정이 없습니다.')
+        st.caption('할부 상세는 카드 청구액에 포함되며 따로 합산하지 않습니다.')
 with tabs[1]:
     st.subheader('등록한 지출 항목')
     c = st.columns(3)
