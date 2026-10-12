@@ -575,6 +575,22 @@ with tabs[0]:
                 markup += '</td>'
             markup += '</tr>'
         st.markdown(markup + '</table>', unsafe_allow_html=True)
+    st.subheader('최근 6개월 출금액 비교')
+    monthly_rows = []
+    for offset in range(-5, 1):
+        month = add_months(MONTH, offset)
+        records = scheduled(DATA, month, SCOPE)
+        if not records: continue
+        known, missing = bill_summary(DATA, records, month)
+        monthly_rows.append({'월': month, '확인된 출금액(원)': known, '금액 미입력(건)': missing})
+    if monthly_rows:
+        chart_data = pd.DataFrame(monthly_rows).set_index('월')[['확인된 출금액(원)']]
+        st.bar_chart(chart_data, color='#268364', height=240)
+        missing_months = [f"{r['월']} ({r['금액 미입력(건)']}건)" for r in monthly_rows if r['금액 미입력(건)']]
+        if missing_months: st.caption('청구액 미입력: ' + ', '.join(missing_months) + ' — 해당 월의 막대는 입력된 금액만 표시합니다.')
+        st.caption('등록된 출금 일정이 있는 달만 표시합니다. 납부 전에는 예정액, 납부 후에는 실제 입력한 납부액 기준입니다.')
+        with st.expander('월별 금액 자세히 보기'): df_table(monthly_rows)
+    else: st.info('최근 6개월에 등록된 출금 일정이 없습니다.')
     with st.expander('월별 요약 / 지난달 비교'):
         st.write(f"납부 완료 {len(completed_bills)}건 / " + money(bill_summary(DATA,completed_bills,MONTH)[0]))
         st.write('받은 돈 ' + money(sum(t['amount'] for t in receipts)))
