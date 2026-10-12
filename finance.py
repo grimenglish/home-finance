@@ -22,7 +22,25 @@ def totals(data, month):
     return sum(t['amount'] for t in tx if t['type'] == 'income'), sum(signed(t) for t in tx)
 def card_total(data, card, month): return sum(signed(t) for t in transactions(data, month) if t['method'] == 'card' and t['source'] == card and t.get('eligible'))
 def paid(data, bill, month): return item(data, 'transactions', 'bill:' + bill + ':' + month) or next((t for t in data['transactions'] if t.get('billId') == bill and t.get('billMonth') == month), None)
-def needed(data, account, month): return sum(b['amount'] for b in active(data, month) if b['method'] == 'account' and b['source'] == account and not paid(data, b['id'], month))
+def bill_amount(data, bill, month):
+    payment = paid(data, bill['id'], month)
+    if payment: return payment['amount']
+    return bill.get('monthlyAmounts', {}).get(month) if bill.get('variable', False) else bill['amount']
+def bill_summary(data, bills, month):
+    amounts = [bill_amount(data, b, month) for b in bills]
+    return sum(a for a in amounts if a is not None), sum(a is None for a in amounts)
+def needed(data, account, month):
+    bills = [b for b in active(data, month) if b['method'] == 'account' and b['source'] == account and not paid(data, b['id'], month)]
+    return bill_summary(data, bills, month)[0]
+def monthly_amount_operation(data, bill, month, amount):
+    if paid(data, bill['id'], month): raise ValueError('이미 납부한 달입니다. 납부내역에서 실제 금액을 수정하세요.')
+    if not bill.get('variable', False): raise ValueError('변동 금액 항목만 월별 청구액을 입력할 수 있습니다.')
+    new = deepcopy(bill)
+    values = new.setdefault('monthlyAmounts', {})
+    if amount is None: values.pop(month, None)
+    else: values[month] = amount
+    checked = deepcopy(data); checked['bills'] = [b for b in checked['bills'] if b['id'] != new['id']] + [new]; validate(checked)
+    return operation(data, 'bills', bill['id'], new)
 def source_name(data, method, id):
     if method == 'cash': return '현금'
     return (item(data, 'cards' if method == 'card' else 'accounts', id) or {}).get('name', '삭제된 항목')
@@ -38,6 +56,12 @@ def validate(data):
                 if not isinstance(x.get(field), int) or isinstance(x[field], bool) or not 0 <= x[field] <= 999999999999: raise ValueError('금액은 0 이상의 정수로 입력하세요.')
             if k in ('bills', 'cards') and (not isinstance(x.get('day'), int) or not 1 <= x['day'] <= 31): raise ValueError('납부일은 1~31일입니다.')
             if k == 'bills':
+                if not isinstance(x.get('variable', False), bool): raise ValueError('잘못된 요금 유형입니다.')
+                monthly = x.get('monthlyAmounts', {})
+                if not isinstance(monthly, dict): raise ValueError('잘못된 월별 청구액입니다.')
+                for month, amount in monthly.items():
+                    if not isinstance(month, str) or datetime.strptime(month, '%Y-%m').strftime('%Y-%m') != month: raise ValueError('청구 월은 YYYY-MM 형식입니다.')
+                    if not isinstance(amount, int) or isinstance(amount, bool) or not 0 <= amount <= 999999999999: raise ValueError('청구액은 0 이상의 정수입니다.')
                 for v in ('start', 'end'):
                     if x.get(v): datetime.strptime(x[v], '%Y-%m')
                 if x.get('start') and x.get('end') and x['start'] > x['end']: raise ValueError('종료 월은 시작 월 이후여야 합니다.')
