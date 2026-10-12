@@ -5,6 +5,7 @@ import csv
 import html
 import io
 import json
+import secrets
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
@@ -12,7 +13,8 @@ from finance import (KINDS, CATEGORIES, uid, empty, digest, item, due, active, t
                      signed, totals, card_total, paid, needed, source_name, validate,
                      operation, event, restore_event, replay, bill_payment, sample)
 from sheets_store import SheetsStore, SetupRequired, UncertainWrite
-from auth_access import auth_ready, allowed_user
+from auth_access import auth_ready, allowed_user, verify_login
+from google_signin import google_button
 
 st.set_page_config(page_title='우리집 금융관리', page_icon='🏠', layout='wide')
 st.markdown('''<style>
@@ -36,6 +38,10 @@ def config():
     try: return dict(st.secrets)
     except Exception: return {}
 CFG = config()
+def logout_session():
+    st.session_state.clear()
+    st.rerun()
+
 def authenticated():
     if not auth_ready(CFG):
         st.title('우리집 금융관리')
@@ -45,27 +51,46 @@ def authenticated():
             st.session_state.data = sample(TODAY.strftime('%Y-%m'))
             st.session_state.demo_events = [restore_event(empty(), st.session_state.data)]
             st.rerun()
-        with st.expander('구글 로그인 설정하기'):
-            st.write('Google Cloud에서 웹 OAuth 클라이언트를 만든 뒤 Streamlit Secrets에 [auth]와 허용 이메일을 설정하세요.')
-            st.caption('GOOGLE_LOGIN_SETUP.md에 클릭 순서가 있습니다. 연결 전에는 실제 금융자료를 불러오지 않습니다.')
+        with st.expander('Public 배포용 구글 로그인 설정'):
+            st.write('Google Cloud에서 웹 OAuth 클라이언트를 만든 뒤 승인된 JavaScript 원본에 앱 주소를 넣고, Streamlit Secrets의 [google_login]에 클라이언트 ID를 설정하세요.')
+            st.caption('이 버전에서는 [auth] 설정을 사용하지 않습니다. GOOGLE_LOGIN_SETUP.md를 따라 설정하세요.')
         st.stop()
-    if not st.user.is_logged_in:
-        st.markdown('<div class="hero"><h2>우리집 금융관리</h2><p>본인 구글 계정으로 들어오세요.</p></div>', unsafe_allow_html=True)
-        left, middle, right = st.columns([1, 1.3, 1])
-        with middle:
-            st.button('구글 계정으로 로그인', on_click=st.login, type='primary', width='stretch')
-            st.caption('허용한 본인 / 가족 계정만 사용할 수 있습니다.')
-        st.stop()
-    claims = dict(st.user)
-    permitted, reason = allowed_user(CFG, claims, st.user.is_logged_in)
-    if not permitted:
-        # Never retain finance data for a rejected identity.
-        for key in ('data', 'store', 'pending', 'active_dialog'):
+    claims = st.session_state.get('google_claims')
+    if claims:
+        permitted, reason = allowed_user(CFG, claims, True)
+        if permitted:
+            st.session_state.login_email = claims['email'].strip().lower()
+            return
+        for key in ('data', 'store', 'pending', 'active_dialog', 'google_claims', 'login_email'):
             st.session_state.pop(key, None)
-        st.error(reason)
-        st.button('로그아웃 / 다른 계정으로 연결', on_click=st.logout)
-        st.stop()
-    st.session_state.login_email = claims['email'].strip().lower()
+        st.session_state.pop('login_nonce', None)
+        st.warning(reason)
+    st.markdown('<div class="hero"><h2>우리집 금융관리</h2><p>본인 구글 계정으로 들어오세요.</p></div>', unsafe_allow_html=True)
+    left, middle, right = st.columns([1, 1.3, 1])
+    with middle:
+        st.subheader('구글 계정으로 로그인')
+        if 'login_nonce' not in st.session_state:
+            st.session_state.login_nonce = secrets.token_urlsafe(32)
+        credential = google_button(CFG['google_login']['client_id'], st.session_state.login_nonce)
+        st.caption('허용한 본인 / 가족 계정만 금융자료를 볼 수 있습니다.')
+        if credential:
+            try:
+                if not isinstance(credential, dict): raise ValueError('로그인 응답 형식이 올바르지 않습니다.')
+                with st.spinner('구글 계정 확인 중…'):
+                    identity = verify_login(CFG, credential.get('credential'), st.session_state.login_nonce)
+                st.session_state.google_claims = identity
+                st.session_state.pop('login_nonce', None)
+                st.rerun()
+            except ValueError as exc:
+                for key in ('data', 'store', 'pending', 'active_dialog'):
+                    st.session_state.pop(key, None)
+                st.error(str(exc))
+            except Exception:
+                st.error('구글 로그인 검증에 연결하지 못했습니다. 잠시 후 다시 시도하세요.')
+        if st.button('다른 계정으로 다시 시도'):
+            st.session_state.pop('login_nonce', None)
+            st.rerun()
+    st.stop()
 
 if not st.session_state.get('demo'): authenticated()
 DEMO = st.session_state.get('demo', False)
@@ -307,7 +332,6 @@ with st.sidebar:
     st.caption('잔액과 납부 여부는 직접 확인해 주세요.')
     if st.button('예시 종료' if DEMO else '로그아웃', width='stretch'):
         st.session_state.clear()
-        if not DEMO: st.logout()
         st.rerun()
 if DEMO: st.warning('예시 화면입니다. 입력과 수정은 가능하지만 구글에는 저장되지 않습니다.')
 if st.session_state.get('notice'): st.success(st.session_state.pop('notice'))

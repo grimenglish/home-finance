@@ -44,29 +44,33 @@ class UI(unittest.TestCase):
     def test_google_login_gate_hides_finance(self):
         from unittest.mock import patch
         from test_auth import CONFIG
-        class User(dict):
-            is_logged_in = False
         at = AppTest.from_file(APP, default_timeout=30)
-        at.secrets['app'] = CONFIG['app']
-        at.secrets['auth'] = CONFIG['auth']
-        with patch('streamlit.user', User()):
-            at.run()
+        at.secrets['app'] = CONFIG['app']; at.secrets['google_login'] = CONFIG['google_login']
+        with patch('google_signin.google_button', return_value=None): at.run()
         self.assertFalse(at.exception); self.assertEqual(len(at.tabs), 0)
-        self.assertTrue(any(b.label == '구글 계정으로 로그인' for b in at.button))
+        self.assertTrue(any(h.value == '구글 계정으로 로그인' for h in at.subheader))
     def test_unallowed_google_account_cannot_read_or_retain_data(self):
         from unittest.mock import patch
         from test_auth import CONFIG
-        class User(dict):
-            is_logged_in = True
         at = AppTest.from_file(APP, default_timeout=30)
-        at.secrets['app'] = CONFIG['app']; at.secrets['auth'] = CONFIG['auth']
+        at.secrets['app'] = CONFIG['app']; at.secrets['google_login'] = CONFIG['google_login']
         at.session_state['data'] = {'sensitive': 'must be cleared'}
         at.session_state['authorized'] = True
-        with patch('streamlit.user', User(email='other@gmail.com', email_verified=True, exp=9999999999)):
-            at.run()
+        at.session_state['google_claims'] = {'email': 'other@gmail.com', 'email_verified': True, 'exp': 9999999999}
+        with patch('google_signin.google_button', return_value=None): at.run()
         self.assertFalse(at.exception); self.assertEqual(len(at.tabs), 0)
-        self.assertTrue(any('허용되지 않은' in e.value for e in at.error))
-        with self.assertRaises(KeyError):
-            _ = at.session_state['data']
+        self.assertTrue(any('허용되지 않은' in e.value for e in at.warning))
+        with self.assertRaises(KeyError): _ = at.session_state['data']
+    def test_verified_component_response_enters_app(self):
+        from unittest.mock import patch
+        from test_auth import CONFIG
+        import time
+        at = AppTest.from_file(APP, default_timeout=30)
+        at.secrets['app'] = CONFIG['app']; at.secrets['google_login'] = CONFIG['google_login']
+        identity = {'email': 'me@gmail.com', 'email_verified': True, 'sub': 'google-id', 'exp': time.time()+3600}
+        with patch('google_signin.google_button', return_value={'credential':'a'*30}), patch('auth_access.verify_login', return_value=identity): at.run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state['google_claims'], identity)
+        self.assertTrue(any('구글 시트' in e.value for e in at.error))
 
 if __name__ == '__main__': unittest.main()

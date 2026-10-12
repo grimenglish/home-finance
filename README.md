@@ -17,6 +17,7 @@ Streamlit 화면, GitHub 코드 관리, Google Sheets 자료 저장 방식의 �
 ## 파일 구성
 
 - `app.py`: 8개 탭과 입력 화면
+- `google_signin.py`, `google_login_component/`: Public 앱의 구글 로그인 버튼
 - `auth_access.py`: 허용 구글 계정 확인
 - `finance.py`: 금액, 실적, 납부 계산
 - `sheets_store.py`: Google Sheets 저장과 읽기
@@ -38,16 +39,16 @@ Streamlit 화면, GitHub 코드 관리, Google Sheets 자료 저장 방식의 �
 7. 서비스 계정의 `키 → 키 추가 → 새 키 만들기 → JSON`으로 키를 받습니다.
 8. JSON의 `client_email` 주소를 복사합니다.
 9. 구글 시트의 `공유` 버튼에서 그 주소를 **편집자**로 초대합니다.
-   시트는 공개하지 않습니다. Drive API 활성화나 OAuth 클라이언트 ID는 필요하지 않습니다.
+   시트는 공개하지 않습니다. 시트 저장에는 Drive API나 로그인용 OAuth ID가 필요하지 않습니다. 로그인용 OAuth ID는 별도 단계에서 만듭니다.
 
 서비스 계정은 본인이 공유한 시트에 앱이 접근하도록 연결하는 전용 계정입니다.
 
 ## 2. GitHub에 코드 올리기
 
-1. 본인 GitHub에서 새 저장소를 만듭니다. 개인용이면 Private을 권장합니다.
+1. 본인 GitHub에서 새 저장소를 만듭니다. 이번 버전은 Public으로 만듭니다. 실제 키와 금융자료는 저장소에 넣지 않습니다.
 2. 압축을 풀고 `app.py`가 저장소 최상위에 오도록 내용을 업로드합니다.
 3. `.streamlit/config.toml`도 폴더 구조를 유지해 올립니다.
-4. `requirements.txt`, `auth_access.py`, `finance.py`, `sheets_store.py`는 반드시 함께 올립니다.
+4. `requirements.txt`, `auth_access.py`, `google_signin.py`, `google_login_component/`, `finance.py`, `sheets_store.py`는 반드시 함께 올립니다.
 
 실제 서비스 계정 JSON, OAuth 비밀키, 금융 백업, `.streamlit/secrets.toml`은 올리지 않습니다.
 압축파일에는 예시 값만 있으며 실제 금융내역이나 계정 키가 없습니다.
@@ -70,11 +71,11 @@ Streamlit 화면, GitHub 코드 관리, Google Sheets 자료 저장 방식의 �
 ## 4. 구글 로그인과 Secrets 설정
 
 구글 로그인 순서는 `GOOGLE_LOGIN_SETUP.md`를 따라하세요.
-`secrets.example.toml`의 `[app]`, `[auth]`, `[gcp_service_account]` 설정을 Streamlit Secrets에 입력합니다.
+`secrets.example.toml`의 `[app]`, `[google_login]`, `[gcp_service_account]` 설정을 Streamlit Secrets에 입력합니다.
 
 - `[app].allowed_emails`: 접근을 허용할 본인과 가족의 구글 이메일
 - `[app].spreadsheet_id`: 금융자료를 저장할 시트 ID
-- `[auth]`: 구글 OAuth 웹 클라이언트 설정
+- `[google_login].client_id`: 구글 로그인 버튼용 웹 OAuth 클라이언트 ID
 - `[gcp_service_account]`: 해당 시트에 편집자로 공유한 서비스 계정
 
 로그인은 구글 계정으로 하고, 가계부는 지정한 가족 공용 시트에 저장합니다.
@@ -82,7 +83,7 @@ Streamlit 화면, GitHub 코드 관리, Google Sheets 자료 저장 방식의 �
 개인정보 설정은 Streamlit Secrets에만 입력하며 GitHub에 올리지 않습니다.
 
 수동 변환이 번거로우면 PC에서 `python prepare_secrets.py`를 실행하세요.
-받은 서비스 계정 JSON, 시트 ID, 앱 주소, 허용 이메일, OAuth ID와 비밀키를 입력하면
+받은 서비스 계정 JSON, 시트 ID, 허용 이메일, OAuth 클라이언트 ID를 입력하면
 `.streamlit/secrets.toml`을 만듭니다. 해당 파일을 Streamlit Secrets에 복사하세요.
 
 ## 사용하는 탭
@@ -155,4 +156,12 @@ Secrets 없이 시작하면 예시 둘러보기 화면이 열립니다.
 - [개인 Google Sheet 연결](https://docs.streamlit.io/develop/tutorials/databases/private-gsheet)
 - [Google Sheets append](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/append)
 
-- [구글 로그인 공식 안내](https://docs.streamlit.io/develop/tutorials/authentication/google)
+- [구글 로그인 검증 공식 안내](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token)
+
+## Public 배포와 로그인
+
+이 버전은 Streamlit 내장 로그인과 `[auth]`를 사용하지 않습니다.
+기존 Secrets의 `[auth]` 및 하위 섹션을 삭제하고 `[google_login]`을 설정하세요.
+구글 로그인 버튼에서 받은 ID 토큰을 서버가 서명, 발급자, 대상 앱, 만료 시각, 세션 nonce와 허용 이메일 기준으로 검증합니다.
+로그인 정보는 서버 세션에만 유지합니다. 페이지를 새로고침하거나 새 기기로 접속하면 다시 로그인할 수 있습니다.
+실제 Google 팝업과 Public 배포 경로는 본인 앱 주소 설정 후 확인해야 합니다.

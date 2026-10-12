@@ -1,95 +1,90 @@
-# 구글 계정으로 로그인하기
+# Public 배포 + 구글 로그인 설정
 
-이 버전은 접속 비밀번호 대신 구글 계정을 사용합니다.
-본인과 가족 이메일을 허용 목록에 넣어야 가계부에 접근할 수 있습니다.
-로그인 기능은 금융자료를 저장하는 서비스 계정과 별도로 설정합니다.
+이 버전은 Streamlit 내장 `st.login()` 대신 Google Identity Services 버튼을 사용합니다.
+앱 주소는 공개되지만 금융자료를 읽고 쓰기 전에 구글 로그인 서명과 허용 이메일을 서버에서 검증합니다.
+가계부 저장 위치는 기존의 비공개 Google Sheets입니다.
 
-## 1. GitHub 코드 교체
+## 1. GitHub 파일 교체
 
-압축을 풀고 기존 저장소에 내용을 덮어씁니다.
-특히 `app.py`, `auth_access.py`, `requirements.txt`를 함께 반영하세요.
-실제 Secrets와 계정 키는 GitHub에 올리지 않습니다.
+압축을 풀고 기존 저장소 파일을 덮어씁니다.
+`app.py`, `auth_access.py`, `google_signin.py`, `google_login_component/`, `requirements.txt`가 함께 있어야 합니다.
+구글 계정 키와 실제 금융자료는 GitHub에 올리지 않습니다.
 
-## 2. Streamlit 앱 주소 확인
+## 2. GitHub를 Public으로 설정
 
-앱을 배포했다면 주소창의 `https://...streamlit.app` 주소를 복사합니다.
-아직 배포 전이라면 먼저 Streamlit에서 GitHub 저장소를 연결해 `app.py`로 배포하세요.
-로그인 설정 전에는 실제 금융자료를 불러오지 않고 예시 화면만 제공합니다.
+저장소에서 Settings → General → Danger Zone → Change repository visibility → Public.
+실제 서비스 계정 JSON, 실제 Secrets, 금융내역이 저장소에 없는 상태에서 진행하세요.
 
-## 3. Google Cloud에서 로그인 앱 만들기
+## 3. Streamlit에 배포
 
-1. [Google Cloud Console](https://console.cloud.google.com/)에서 기존 프로젝트를 선택합니다.
-2. **Google Auth Platform**을 엽니다.
-3. **Branding**에서 앱 이름을 `우리집 금융관리`로 입력하고 필수 이메일을 설정합니다.
-4. **Audience**에서 개인 Gmail 계정을 쓴다면 External을 선택합니다.
-5. Testing 상태에서는 **Test users**에 본인과 가족 이메일을 추가합니다.
-6. **Clients → Create client**를 누릅니다.
-7. Application type은 **Web application**을 선택합니다.
-8. **Authorized redirect URIs**에 아래 주소를 넣습니다.
+GitHub 저장소를 연결하고 Branch는 main, Main file path는 app.py, Python은 3.12로 설정합니다.
+Secrets를 아직 넣지 않았다면 예시 화면만 열립니다.
+배포 후 주소창의 `https://...streamlit.app` 주소를 복사합니다.
+이미 배포된 앱은 Streamlit 앱 설정에서 공개 범위를 Public으로 맞춥니다.
+
+## 4. 기존 내장 로그인 설정 삭제
+
+Streamlit Secrets에 `[auth]`, `[auth.google]` 같은 섹션이 있다면 해당 섹션 전체를 삭제합니다.
+`[app].allowed_emails`, 시트 ID, `[gcp_service_account]`는 유지합니다.
+이 버전은 native 로그인 cookie_secret, client_secret, redirect_uri를 사용하지 않습니다.
+
+## 5. Google Cloud 로그인 클라이언트
+
+1. Google Cloud Console에서 프로젝트를 선택합니다.
+2. Google Auth Platform → Branding에서 앱 이름과 필수 이메일을 설정합니다.
+3. Audience는 개인 Gmail이면 External. Testing이면 본인 / 가족을 Test users에 추가합니다.
+4. Clients → Create client → Web application 선택.
+5. **Authorized JavaScript origins**에 앱 주소를 입력합니다.
 
 ```text
-https://본인앱주소.streamlit.app/oauth2callback
+https://본인앱주소.streamlit.app
 ```
 
-실제 앱 주소 뒤에 `/oauth2callback`을 붙이는 것입니다. 철자, 대소문자, https가 정확히 일치해야 합니다.
-이 방식에서는 JavaScript origins 입력은 필요하지 않습니다.
-생성한 **Client ID**와 **Client secret**을 본인 PC에 보관합니다.
+주소 뒤 `/oauth2callback`이나 `/` 같은 경로를 넣지 않습니다.
+로컬 테스트를 하려면 `http://localhost:8501`도 원본 목록에 추가합니다.
+팝업 callback 방식이므로 Authorized redirect URIs는 이 버전에서 필요하지 않습니다.
+이전에 만든 웹 OAuth 클라이언트가 있다면 그 클라이언트의 JavaScript origins만 추가해도 됩니다.
 
-## 4. Streamlit Secrets 변경
+6. Create 후 **Client ID**를 복사합니다. Client secret은 로그인에 사용하지 않습니다.
 
-Streamlit 앱의 설정에서 Secrets를 엽니다.
-기존 서비스 계정 설정은 유지하고 `[app]`과 `[auth]`를 다음처럼 설정합니다.
-같은 이름의 TOML 섹션을 두 번 만들지 마세요.
-예시의 자리표시는 실제 값으로 바꿉니다.
+## 6. Streamlit Secrets 설정
+
+아래 예시의 자리표시를 실제 값으로 바꿉니다. 같은 TOML 섹션을 두 번 만들지 않습니다.
 
 ```toml
 [app]
 spreadsheet_id = "기존_구글시트_ID"
 allowed_emails = ["본인이메일@gmail.com", "가족이메일@gmail.com"]
 
-[auth]
-redirect_uri = "https://본인앱주소.streamlit.app/oauth2callback"
-cookie_secret = "본인PC에서_새로_생성한_무작위_문자열"
-client_id = "발급받은_Client_ID"
-client_secret = "발급받은_Client_secret"
-server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+[google_login]
+client_id = "발급받은_Client_ID.apps.googleusercontent.com"
 
 [gcp_service_account]
-# 기존 서비스 계정 항목과 비밀키를 그대로 유지
+# 기존 서비스 계정의 모든 항목과 private_key 유지
 ```
 
-기존 `[app].password`는 삭제할 수 있습니다. 이 버전에서는 사용하지 않습니다.
-`cookie_secret`은 본인 PC에서 다음 명령으로 새로 생성하고, 결과를 Secrets에만 넣으세요.
+시트 저장용 서비스 계정은 편집자로 시트에 공유해야 합니다.
+실제 키는 Streamlit Secrets에만 넣으며 GitHub와 채팅에 보내지 않습니다.
+`python prepare_secrets.py`로 전체 TOML을 생성할 수도 있습니다.
 
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
+## 7. 확인
 
-또는 `python prepare_secrets.py`로 전체 설정 파일을 생성할 수 있습니다.
-로그인 허용 이메일은 주소 전체를 입력합니다. 이름이나 `@gmail.com`만 입력하지 않습니다.
+1. Secrets 저장 후 앱 재시작.
+2. 구글 로그인 버튼 누르기 → 허용 계정 선택.
+3. 가계부가 열리는지 확인.
+4. 내역 저장 → 자료 새로고침 → 시트 반영 확인.
+5. 로그아웃 후 허용되지 않은 계정으로 로그인하여 차단 확인.
 
-## 5. 로그인 확인
+Google 팝업이 안 열리면 이 사이트의 팝업을 허용합니다.
+구글 버튼이 뜨지 않으면 google_login_component 폴더 업로드와 앱 주소의 JavaScript origins 등록을 확인합니다.
+`origin_mismatch` 오류가 보이면 현재 앱 주소를 Google Cloud 원본 목록에 정확히 등록합니다.
+테스트 상태에서는 Google Test users와 앱 allowed_emails에 모두 등록합니다.
 
-1. Secrets를 저장하고 앱을 재시작합니다.
-2. **구글 계정으로 로그인**을 누릅니다.
-3. 허용 목록에 넣은 본인 계정을 선택합니다.
-4. 가계부 화면이 열리는지 확인합니다.
-5. 다른 계정을 선택하면 접근이 차단되는지 확인합니다.
-6. 기존 구글 시트에 저장과 새로고침이 정상적으로 되는지 확인합니다.
+로그인 정보는 서버 세션에만 유지됩니다. 페이지 새로고침, 세션 만료, 새 기기 접속 시 다시 로그인할 수 있습니다.
+허용 가족은 같은 구글 시트의 가계부를 사용합니다. 구글 계정마다 별도 가계부를 만들지는 않습니다.
 
-가족은 Google Cloud Test users와 Streamlit allowed_emails에 모두 등록해야 테스트 상태에서 이용할 수 있습니다.
-가계부는 지정한 시트 한 개를 함께 사용합니다. 계정별로 다른 시트를 만드는 방식은 아닙니다.
+실제 Google 팝업과 Public 배포는 사용자 계정 설정 후 검증해야 합니다.
+코드 테스트에서는 토큰 서명 검증 호출, 세션 nonce 연결, 허용 이메일, 만료 계정 차단을 확인했습니다.
 
-## 오류가 보이면
-
-- `redirect_uri_mismatch`: Google Cloud와 Secrets의 callback 주소를 정확하게 맞추기
-- `access_denied`: Google Cloud의 Test users 확인
-- 허용되지 않은 계정: `[app].allowed_emails`에 실제 로그인한 이메일 등록
-- 로그인 만료: 로그아웃 후 다시 로그인
-- Authlib 오류: 최신 `requirements.txt`를 GitHub에 반영하고 Streamlit 재시작
-- 구글 저장 권한 오류: 로그인 OAuth 설정과 별개로 시트를 서비스 계정에 편집자로 공유하기
-
-실제 구글 로그인 왕복 과정은 계정 설정 후 본인 웹앱에서 확인해야 합니다.
-코드 테스트에서는 허용 목록, 이메일 확인, 만료 토큰 차단을 확인합니다.
-
-[Streamlit 공식 구글 로그인 안내](https://docs.streamlit.io/develop/tutorials/authentication/google)
+[Google 버튼 API](https://developers.google.com/identity/gsi/web/reference/js-reference)
+[서버 로그인 검증](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token)
