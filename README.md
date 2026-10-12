@@ -17,6 +17,7 @@ Streamlit 화면, GitHub 코드 관리, Google Sheets 자료 저장 방식의 �
 ## 파일 구성
 
 - `app.py`: 8개 탭과 입력 화면
+- `auth_access.py`: 허용 구글 계정 확인
 - `finance.py`: 금액, 실적, 납부 계산
 - `sheets_store.py`: Google Sheets 저장과 읽기
 - `requirements.txt`: 필요한 Python 패키지
@@ -46,9 +47,9 @@ Streamlit 화면, GitHub 코드 관리, Google Sheets 자료 저장 방식의 �
 1. 본인 GitHub에서 새 저장소를 만듭니다. 개인용이면 Private을 권장합니다.
 2. 압축을 풀고 `app.py`가 저장소 최상위에 오도록 내용을 업로드합니다.
 3. `.streamlit/config.toml`도 폴더 구조를 유지해 올립니다.
-4. `requirements.txt`, `finance.py`, `sheets_store.py`는 반드시 함께 올립니다.
+4. `requirements.txt`, `auth_access.py`, `finance.py`, `sheets_store.py`는 반드시 함께 올립니다.
 
-실제 서비스 계정 JSON, 접속 비밀번호, 금융 백업, `.streamlit/secrets.toml`은 올리지 않습니다.
+실제 서비스 계정 JSON, OAuth 비밀키, 금융 백업, `.streamlit/secrets.toml`은 올리지 않습니다.
 압축파일에는 예시 값만 있으며 실제 금융내역이나 계정 키가 없습니다.
 
 ## 3. Streamlit에서 웹앱 배포
@@ -60,26 +61,29 @@ Streamlit 화면, GitHub 코드 관리, Google Sheets 자료 저장 방식의 �
 5. Advanced settings의 Secrets에 아래 설정을 붙여넣습니다.
 6. Deploy를 누릅니다. 이미 배포했다면 앱 설정의 Secrets에서 입력할 수 있습니다.
 7. 생성된 `…streamlit.app` 주소로 접속합니다.
-8. 본인이 정한 접속 비밀번호를 입력합니다.
+8. 허용한 본인 구글 계정으로 로그인합니다.
 9. 처음 나타나는 `구글 시트 연결 완료하기` 버튼을 한 번 누릅니다.
 
 구글 시트에 `금융기록` 탭이 준비되면 실제 사용을 시작할 수 있습니다.
-같은 앱 주소와 비밀번호를 사용하는 가족은 같은 가계부를 봅니다.
+허용 이메일 목록에 등록한 가족은 같은 가계부를 봅니다.
 
-## 4. Secrets 설정
+## 4. 구글 로그인과 Secrets 설정
 
-`secrets.example.toml`을 참고합니다.
+구글 로그인 순서는 `GOOGLE_LOGIN_SETUP.md`를 따라하세요.
+`secrets.example.toml`의 `[app]`, `[auth]`, `[gcp_service_account]` 설정을 Streamlit Secrets에 입력합니다.
 
-- `[app]`의 `password`: 본인만 아는 접속 비밀번호
-- `[app]`의 `spreadsheet_id`: 1단계에서 복사한 시트 ID
-- `[gcp_service_account]`: 받은 서비스 계정 JSON의 각 항목
+- `[app].allowed_emails`: 접근을 허용할 본인과 가족의 구글 이메일
+- `[app].spreadsheet_id`: 금융자료를 저장할 시트 ID
+- `[auth]`: 구글 OAuth 웹 클라이언트 설정
+- `[gcp_service_account]`: 해당 시트에 편집자로 공유한 서비스 계정
 
-`private_key` 안의 줄바꿈은 `\n` 그대로 유지하세요. TOML의 문자열은 큰따옴표로 감쌉니다.
-실제 설정은 Streamlit의 Secrets에만 입력하며 앱 화면이나 GitHub에 노출하지 않습니다.
+로그인은 구글 계정으로 하고, 가계부는 지정한 가족 공용 시트에 저장합니다.
+허용되지 않은 계정은 금융자료를 불러오지 않습니다. 각 구글 계정별로 별도 가계부가 생기는 방식은 아닙니다.
+개인정보 설정은 Streamlit Secrets에만 입력하며 GitHub에 올리지 않습니다.
 
 수동 변환이 번거로우면 PC에서 `python prepare_secrets.py`를 실행하세요.
-JSON 파일 경로, 시트 ID, 원하는 비밀번호를 입력하면 `.streamlit/secrets.toml`을 만듭니다.
-그 파일의 내용을 Streamlit Secrets에 복사합니다. 해당 파일은 GitHub에 올리지 않습니다.
+받은 서비스 계정 JSON, 시트 ID, 앱 주소, 허용 이메일, OAuth ID와 비밀키를 입력하면
+`.streamlit/secrets.toml`을 만듭니다. 해당 파일을 Streamlit Secrets에 복사하세요.
 
 ## 사용하는 탭
 
@@ -144,9 +148,11 @@ Secrets 없이 시작하면 예시 둘러보기 화면이 열립니다.
 ## 검증과 공식 참고
 
 계산, 월말 처리, 납부 중복 방지, 환불, 동시 수정 충돌, 로그 재시도,
-로그인 차단과 예시 화면 입력을 테스트합니다. 실제 구글 연결과 운영 배포는 본인 계정 설정 후 확인해야 합니다.
+구글 계정 접근 차단과 예시 화면 입력을 테스트합니다. 실제 구글 연결과 운영 배포는 본인 계정 설정 후 확인해야 합니다.
 
 - [Streamlit 배포](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app)
 - [Streamlit Secrets](https://docs.streamlit.io/develop/concepts/connections/secrets-management)
 - [개인 Google Sheet 연결](https://docs.streamlit.io/develop/tutorials/databases/private-gsheet)
 - [Google Sheets append](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/append)
+
+- [구글 로그인 공식 안내](https://docs.streamlit.io/develop/tutorials/authentication/google)

@@ -41,19 +41,32 @@ class UI(unittest.TestCase):
         record = next(t for t in at.session_state['data']['transactions'] if t['name'] == '커피')
         self.assertEqual(record['source'], 'demo-card'); self.assertTrue(record['eligible'])
         self.assertTrue(any(x.value == '87,000원' for x in at.metric))
-    def test_login_gate_hides_finance(self):
+    def test_google_login_gate_hides_finance(self):
+        from unittest.mock import patch
+        from test_auth import CONFIG
+        class User(dict):
+            is_logged_in = False
         at = AppTest.from_file(APP, default_timeout=30)
-        at.secrets['app'] = {'password': 'private-test-password'}
-        at.run()
+        at.secrets['app'] = CONFIG['app']
+        at.secrets['auth'] = CONFIG['auth']
+        with patch('streamlit.user', User()):
+            at.run()
         self.assertFalse(at.exception); self.assertEqual(len(at.tabs), 0)
-        label(at.text_input, '접속 비밀번호').set_value('wrong')
-        label(at.button, '입장하기').click().run()
+        self.assertTrue(any(b.label == '구글 계정으로 로그인' for b in at.button))
+    def test_unallowed_google_account_cannot_read_or_retain_data(self):
+        from unittest.mock import patch
+        from test_auth import CONFIG
+        class User(dict):
+            is_logged_in = True
+        at = AppTest.from_file(APP, default_timeout=30)
+        at.secrets['app'] = CONFIG['app']; at.secrets['auth'] = CONFIG['auth']
+        at.session_state['data'] = {'sensitive': 'must be cleared'}
+        at.session_state['authorized'] = True
+        with patch('streamlit.user', User(email='other@gmail.com', email_verified=True, exp=9999999999)):
+            at.run()
         self.assertFalse(at.exception); self.assertEqual(len(at.tabs), 0)
-        at.session_state['next_attempt'] = 0
-        label(at.text_input, '접속 비밀번호').set_value('private-test-password')
-        label(at.button, '입장하기').click().run()
-        self.assertFalse(at.exception)
-        self.assertTrue(at.session_state['authorized'])
-        self.assertTrue(any('구글 시트' in e.value for e in at.error))
+        self.assertTrue(any('허용되지 않은' in e.value for e in at.error))
+        with self.assertRaises(KeyError):
+            _ = at.session_state['data']
 
 if __name__ == '__main__': unittest.main()
